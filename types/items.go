@@ -11,7 +11,7 @@ const (
 
 // CommandExecutionItem represents a command executed by the agent.
 type CommandExecutionItem struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	// Command is the command line executed by the agent
 	Command string `json:"command"`
@@ -53,7 +53,7 @@ const (
 
 // FileChangeItem represents a set of file changes by the agent.
 type FileChangeItem struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	// Changes are individual file changes that comprise the patch
 	Changes []FileUpdateChange `json:"changes"`
@@ -77,7 +77,7 @@ const (
 
 // McpToolCallItem represents a call to an MCP tool.
 type McpToolCallItem struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	// Server is the name of the MCP server handling the request
 	Server string `json:"server"`
@@ -111,7 +111,7 @@ func (i McpToolCallItem) GetType() string {
 
 // AgentMessageItem represents a response from the agent.
 type AgentMessageItem struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	// Text is either natural-language text or JSON when structured output is requested
 	Text string `json:"text"`
@@ -124,7 +124,7 @@ func (i AgentMessageItem) GetType() string {
 
 // ReasoningItem represents the agent's reasoning summary.
 type ReasoningItem struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
@@ -136,8 +136,8 @@ func (i ReasoningItem) GetType() string {
 
 // WebSearchItem captures a web search request.
 type WebSearchItem struct {
-	ID string `json:"id"`
-	Type string `json:"type"`
+	ID    string `json:"id"`
+	Type  string `json:"type"`
 	Query string `json:"query"`
 }
 
@@ -154,8 +154,8 @@ type TodoItem struct {
 
 // TodoListItem tracks the agent's running to-do list.
 type TodoListItem struct {
-	ID string `json:"id"`
-	Type string `json:"type"`
+	ID    string     `json:"id"`
+	Type  string     `json:"type"`
 	Items []TodoItem `json:"items"`
 }
 
@@ -166,8 +166,8 @@ func (i TodoListItem) GetType() string {
 
 // ErrorItem describes a non-fatal error surfaced as an item.
 type ErrorItem struct {
-	ID string `json:"id"`
-	Type string `json:"type"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
 	Message string `json:"message"`
 }
 

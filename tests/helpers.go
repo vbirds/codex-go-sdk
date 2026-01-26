@@ -5,7 +5,15 @@ import (
 	"runtime"
 )
 
-// FindCodexBinary finds the codex binary in the parent codex project
+const (
+	archAMD64  = "amd64"
+	archARM64  = "arm64"
+	osWindows  = "windows"
+	binaryName = "codex"
+	binaryWin  = "codex.exe"
+)
+
+// FindCodexBinary finds the codex binary in the parent codex project.
 func FindCodexBinary() string {
 	_, currentFile, _, _ := runtime.Caller(0)
 	// From tests/helpers.go, go up 2 levels to codex-go-sdk, then to codex
@@ -18,23 +26,23 @@ func FindCodexBinary() string {
 	switch platform {
 	case "linux":
 		switch arch {
-		case "amd64":
+		case archAMD64:
 			targetTriple = "x86_64-unknown-linux-musl"
-		case "arm64":
+		case archARM64:
 			targetTriple = "aarch64-unknown-linux-musl"
 		}
 	case "darwin":
 		switch arch {
-		case "amd64":
+		case archAMD64:
 			targetTriple = "x86_64-apple-darwin"
-		case "arm64":
+		case archARM64:
 			targetTriple = "aarch64-apple-darwin"
 		}
-	case "windows":
+	case osWindows:
 		switch arch {
-		case "amd64":
+		case archAMD64:
 			targetTriple = "x86_64-pc-windows-msvc"
-		case "arm64":
+		case archARM64:
 			targetTriple = "aarch64-pc-windows-msvc"
 		}
 	}
@@ -43,11 +51,10 @@ func FindCodexBinary() string {
 		return ""
 	}
 
-	binaryName := "codex"
-	if platform == "windows" {
-		binaryName = "codex.exe"
+	binaryNm := "codex"
+	if platform == osWindows {
+		binaryNm = binaryWin
 	}
-
-	binaryPath := filepath.Join(codexRoot, "codex-rs", "target", "debug", binaryName)
+	binaryPath := filepath.Join(codexRoot, "codex-rs", "target", "debug", binaryNm)
 	return binaryPath
 }

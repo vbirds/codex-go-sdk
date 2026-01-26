@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	codex "github.com/fanwenlin/codex-go-sdk"
+	"github.com/fanwenlin/codex-go-sdk/codex"
 	"github.com/fanwenlin/codex-go-sdk/types"
 )
 

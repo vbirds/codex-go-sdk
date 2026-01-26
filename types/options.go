@@ -4,19 +4,19 @@ package types
 type ApprovalMode string
 
 const (
-	ApprovalModeNever      ApprovalMode = "never"
-	ApprovalModeOnRequest  ApprovalMode = "on-request"
-	ApprovalModeOnFailure  ApprovalMode = "on-failure"
-	ApprovalModeUntrusted  ApprovalMode = "untrusted"
+	ApprovalModeNever     ApprovalMode = "never"
+	ApprovalModeOnRequest ApprovalMode = "on-request"
+	ApprovalModeOnFailure ApprovalMode = "on-failure"
+	ApprovalModeUntrusted ApprovalMode = "untrusted"
 )
 
 // SandboxMode represents the sandbox access mode.
 type SandboxMode string
 
 const (
-	SandboxModeReadOnly        SandboxMode = "read-only"
-	SandboxModeWorkspaceWrite  SandboxMode = "workspace-write"
-	SandboxModeFullAccess      SandboxMode = "danger-full-access"
+	SandboxModeReadOnly       SandboxMode = "read-only"
+	SandboxModeWorkspaceWrite SandboxMode = "workspace-write"
+	SandboxModeFullAccess     SandboxMode = "danger-full-access"
 )
 
 // ModelReasoningEffort represents the reasoning effort level for the model.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	codex "github.com/fanwenlin/codex-go-sdk"
+	"github.com/fanwenlin/codex-go-sdk/codex"
 	"github.com/fanwenlin/codex-go-sdk/types"
 )
 
@@ -186,7 +186,7 @@ func TestEnvPassedToExec(t *testing.T) {
 	mockExec.SetEvents([]string{`{"type":"thread.started","thread_id":"test"}`})
 
 	client := codex.NewCodexWithExec(mockExec, types.CodexOptions{
-		ApiKey: "test-key-123",
+		ApiKey:  "test-key-123",
 		BaseUrl: "https://api.example.com",
 	})
 

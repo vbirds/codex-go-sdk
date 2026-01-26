@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 )
 
 // SseEvent represents a Server-Sent Event
@@ -61,20 +62,23 @@ func StartMockServer(events []SseResponseBody, statusCode int) (*MockServer, err
 	ms.listener = listener
 
 	ms.Server = &http.Server{
-		Handler: mux,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	ms.URL = fmt.Sprintf("http://%s", listener.Addr().String())
 
 	// Start serving
-	go ms.Server.Serve(listener)
+	go func() {
+		_ = ms.Server.Serve(listener)
+	}()
 
 	return ms, nil
 }
 
 // handleResponses handles the /responses endpoint
 func (ms *MockServer) handleResponses(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -88,7 +92,7 @@ func (ms *MockServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Parse JSON
 	var jsonBody map[string]interface{}
-	json.Unmarshal([]byte(bodyStr), &jsonBody)
+	_ = json.Unmarshal([]byte(bodyStr), &jsonBody)
 
 	// Record request
 	ms.Requests = append(ms.Requests, &RecordedRequest{
@@ -106,11 +110,12 @@ func (ms *MockServer) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 	// Write SSE events
 	for _, event := range eventBatch.Events {
-		fmt.Fprintf(w, "event: %s\n", event.Type)
+		_, _ = fmt.Fprintf(w, "event: %s\n", event.Type)
 		data, _ := json.Marshal(event.Data)
-		fmt.Fprintf(w, "data: %s\n\n", string(data))
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", string(data))
 	}
 
+	//nolint:errcheck // Flush() doesn't return an error, this is a false positive
 	w.(http.Flusher).Flush()
 }
 
@@ -165,9 +170,9 @@ func AssistantMessage(text string, itemID ...string) SseEvent {
 		Type: "response.output_item.done",
 		Data: map[string]interface{}{
 			"item": map[string]interface{}{
-				"type":    "message",
-				"role":    "assistant",
-				"id":      id,
+				"type": "message",
+				"role": "assistant",
+				"id":   id,
 				"content": []map[string]interface{}{
 					{
 						"type": "output_text",
@@ -185,9 +190,9 @@ func ShellCall() SseEvent {
 		Type: "response.output_item.done",
 		Data: map[string]interface{}{
 			"item": map[string]interface{}{
-				"type": "function_call",
-				"call_id": fmt.Sprintf("call_id%d", len("test")),
-				"name":  "shell",
+				"type":      "function_call",
+				"call_id":   fmt.Sprintf("call_id%d", len("test")),
+				"name":      "shell",
 				"arguments": `{"command":["bash","-lc","echo 'Hello, world!'"],"timeout_ms":100}`,
 			},
 		},
@@ -223,9 +228,9 @@ func ResponseCompleted(responseID ...string) SseEvent {
 					"input_tokens_details": map[string]interface{}{
 						"cached_tokens": float64(12),
 					},
-					"output_tokens":        float64(5),
+					"output_tokens":         float64(5),
 					"output_tokens_details": nil,
-					"total_tokens":         float64(47),
+					"total_tokens":          float64(47),
 				},
 			},
 		},

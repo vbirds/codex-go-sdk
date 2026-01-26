@@ -3,7 +3,7 @@ package tests
 import (
 	"testing"
 
-	codex "github.com/fanwenlin/codex-go-sdk"
+	"github.com/fanwenlin/codex-go-sdk/codex"
 	"github.com/fanwenlin/codex-go-sdk/types"
 )
 
@@ -130,7 +130,7 @@ func TestTurnCreation(t *testing.T) {
 func TestCodexClientCreation(t *testing.T) {
 	// Test creating Codex client with options
 	client := codex.NewCodex(types.CodexOptions{
-		ApiKey: "test-key",
+		ApiKey:  "test-key",
 		BaseUrl: "https://api.example.com",
 	})
 
@@ -257,10 +257,10 @@ func TestItemTypes(t *testing.T) {
 	// Test all item types
 	items := []types.ThreadItem{
 		&types.CommandExecutionItem{
-			ID:   "cmd-1",
-			Type: "command_execution",
+			ID:      "cmd-1",
+			Type:    "command_execution",
 			Command: "ls -la",
-			Status: types.CommandExecutionStatusInProgress,
+			Status:  types.CommandExecutionStatusInProgress,
 		},
 		&types.FileChangeItem{
 			ID:   "file-1",
