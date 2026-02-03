@@ -50,192 +50,146 @@ func (t *Thread) runStreamedInternal(input types.Input, turnOptions types.TurnOp
 		return nil, fmt.Errorf("failed to create output schema file: %w", err)
 	}
 
-	// Normalize input
 	prompt, images := t.normalizeInput(input)
+	inputItems := t.normalizeInputItems(input)
 
-	// Build context
-	ctx := context.Background()
-	if turnOptions.Context != nil {
-		if c, ok := turnOptions.Context.(context.Context); ok {
-			ctx = c
-		}
-	}
-
-	// Prepare options
-	options := t.threadOptions
-
-	// Build arguments
-	var threadId *string
-	if t.id != nil {
-		threadId = t.id
-	}
-
-	args := CodexExecArgs{
-		Input:                 prompt,
-		BaseUrl:               t.options.BaseUrl,
-		ApiKey:                t.options.ApiKey,
-		ThreadId:              threadId,
-		Images:                images,
-		Model:                 options.Model,
-		SandboxMode:           string(options.SandboxMode),
-		WorkingDirectory:      options.WorkingDirectory,
-		SkipGitRepoCheck:      options.SkipGitRepoCheck,
-		DisableSkills:         options.DisableSkills,
-		OutputSchemaFile:      schemaFile.SchemaPath,
-		ModelReasoningEffort:  string(options.ModelReasoningEffort),
-		Context:               ctx,
-		NetworkAccessEnabled:  options.NetworkAccessEnabled,
-		WebSearchMode:         string(options.WebSearchMode),
-		WebSearchEnabled:      options.WebSearchEnabled,
-		ApprovalPolicy:        string(options.ApprovalPolicy),
-		AdditionalDirectories: options.AdditionalDirectories,
-	}
+	ctx := resolveTurnContext(turnOptions)
+	args := t.buildExecArgs(ctx, prompt, inputItems, images, schemaFile.SchemaPath)
 
 	events := make(chan types.ThreadEvent)
 
 	go func() {
 		defer close(events)
 		defer func() {
-			if err := schemaFile.Cleanup(); err != nil {
+			if cleanupErr := schemaFile.Cleanup(); cleanupErr != nil {
 				// Log cleanup error but don't fail
-				fmt.Fprintf(os.Stderr, "Warning: failed to cleanup schema file: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Warning: failed to cleanup schema file: %v\n", cleanupErr)
 			}
 		}()
 
-		// Run the exec command
 		resultChan := t.exec.Run(args)
 
 		for result := range resultChan {
-			if result.Error != nil {
-				// Send error as event and stop
+			event, eventErr := t.processExecResult(result)
+			if eventErr != nil {
 				events <- &types.ThreadErrorEvent{
 					Type:    "error",
-					Message: result.Error.Error(),
+					Message: eventErr.Error(),
 				}
 				return
 			}
-
-			// Parse the event
-			var rawEvent map[string]interface{}
-			if err := json.Unmarshal([]byte(result.Line), &rawEvent); err != nil {
-				events <- &types.ThreadErrorEvent{
-					Type:    "error",
-					Message: fmt.Sprintf("failed to parse event: %v", err),
-				}
-				return
+			if event == nil {
+				continue
 			}
-
-			eventType, ok := rawEvent["type"].(string)
-			if !ok {
-				events <- &types.ThreadErrorEvent{
-					Type:    "error",
-					Message: fmt.Sprintf("event missing type field: %s", result.Line),
-				}
-				return
-			}
-
-			var event types.ThreadEvent
-			switch eventType {
-			case "thread.started":
-				threadStarted := &types.ThreadStartedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), threadStarted); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal thread.started: %v", err),
-					}
-					return
-				}
-				event = threadStarted
-				// Set thread ID
+			if threadStarted, ok := event.(*types.ThreadStartedEvent); ok {
 				t.id = &threadStarted.ThreadId
-			case "turn.started":
-				turnStarted := &types.TurnStartedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), turnStarted); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal turn.started: %v", err),
-					}
-					return
-				}
-				event = turnStarted
-			case "turn.completed":
-				turnCompleted := &types.TurnCompletedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), turnCompleted); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal turn.completed: %v", err),
-					}
-					return
-				}
-				event = turnCompleted
-			case "turn.failed":
-				turnFailed := &types.TurnFailedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), turnFailed); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal turn.failed: %v", err),
-					}
-					return
-				}
-				event = turnFailed
-			case "item.started":
-				itemStarted := &types.ItemStartedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), itemStarted); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal item.started: %v", err),
-					}
-					return
-				}
-				event = itemStarted
-			case "item.updated":
-				itemUpdated := &types.ItemUpdatedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), itemUpdated); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal item.updated: %v", err),
-					}
-					return
-				}
-				event = itemUpdated
-			case "item.completed":
-				itemCompleted := &types.ItemCompletedEvent{}
-				if err := json.Unmarshal([]byte(result.Line), itemCompleted); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal item.completed: %v", err),
-					}
-					return
-				}
-				event = itemCompleted
-			case "error":
-				errorEvent := &types.ThreadErrorEvent{}
-				if err := json.Unmarshal([]byte(result.Line), errorEvent); err != nil {
-					events <- &types.ThreadErrorEvent{
-						Type:    "error",
-						Message: fmt.Sprintf("failed to unmarshal error: %v", err),
-					}
-					return
-				}
-				event = errorEvent
-			default:
-				events <- &types.ThreadErrorEvent{
-					Type:    "error",
-					Message: fmt.Sprintf("unknown event type: %s", eventType),
-				}
-				return
 			}
-
-			// Send event to channel
 			select {
 			case events <- event:
-			case <-args.Context.Done():
+			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
 	return events, nil
+}
+
+func resolveTurnContext(turnOptions types.TurnOptions) context.Context {
+	if turnOptions.Context != nil {
+		if ctx, ok := turnOptions.Context.(context.Context); ok {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+func (t *Thread) buildExecArgs(
+	ctx context.Context,
+	prompt string,
+	inputItems []types.UserInput,
+	images []string,
+	schemaPath string,
+) CodexExecArgs {
+	options := t.threadOptions
+	threadID := t.id
+
+	return CodexExecArgs{
+		Input:                 prompt,
+		InputItems:            inputItems,
+		BaseUrl:               t.options.BaseUrl,
+		ApiKey:                t.options.ApiKey,
+		ThreadId:              threadID,
+		Images:                images,
+		Model:                 options.Model,
+		SandboxMode:           string(options.SandboxMode),
+		WorkingDirectory:      options.WorkingDirectory,
+		SkipGitRepoCheck:      options.SkipGitRepoCheck,
+		DisableSkills:         options.DisableSkills,
+		OutputSchemaFile:      schemaPath,
+		ModelReasoningEffort:  string(options.ModelReasoningEffort),
+		Context:               ctx,
+		NetworkAccessEnabled:  options.NetworkAccessEnabled,
+		WebSearchMode:         string(options.WebSearchMode),
+		WebSearchEnabled:      options.WebSearchEnabled,
+		ApprovalPolicy:        string(options.ApprovalPolicy),
+		ApprovalHandler:       options.ApprovalHandler,
+		AdditionalDirectories: options.AdditionalDirectories,
+	}
+}
+
+func (t *Thread) processExecResult(result ExecResult) (types.ThreadEvent, error) {
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return parseThreadEvent(result.Line)
+}
+
+func parseThreadEvent(line string) (types.ThreadEvent, error) {
+	eventType, err := extractEventType(line)
+	if err != nil {
+		return nil, err
+	}
+	normalizedType := strings.ReplaceAll(eventType, "/", ".")
+	if factory, ok := threadEventFactory(normalizedType); ok {
+		event := factory()
+		if unmarshalErr := json.Unmarshal([]byte(line), event); unmarshalErr != nil {
+			return nil, fmt.Errorf("failed to unmarshal %s: %w", normalizedType, unmarshalErr)
+		}
+		return event, nil
+	}
+	return &types.RawEvent{
+		Type: eventType,
+		Raw:  json.RawMessage(line),
+	}, nil
+}
+
+func extractEventType(line string) (string, error) {
+	var meta struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(line), &meta); err != nil {
+		return "", fmt.Errorf("failed to parse event: %w", err)
+	}
+	if meta.Type == "" {
+		return "", fmt.Errorf("event missing type field: %s", line)
+	}
+	return meta.Type, nil
+}
+
+func threadEventFactory(eventType string) (func() types.ThreadEvent, bool) {
+	factories := map[string]func() types.ThreadEvent{
+		"thread.started": func() types.ThreadEvent { return &types.ThreadStartedEvent{} },
+		"turn.started":   func() types.ThreadEvent { return &types.TurnStartedEvent{} },
+		"turn.completed": func() types.ThreadEvent { return &types.TurnCompletedEvent{} },
+		"turn.failed":    func() types.ThreadEvent { return &types.TurnFailedEvent{} },
+		"item.started":   func() types.ThreadEvent { return &types.ItemStartedEvent{} },
+		"item.updated":   func() types.ThreadEvent { return &types.ItemUpdatedEvent{} },
+		"item.completed": func() types.ThreadEvent { return &types.ItemCompletedEvent{} },
+		"error":          func() types.ThreadEvent { return &types.ThreadErrorEvent{} },
+	}
+	factory, ok := factories[eventType]
+	return factory, ok
 }
 
 // Run provides input to the agent and returns the completed turn.
@@ -306,4 +260,15 @@ func (t *Thread) normalizeInput(input types.Input) (prompt string, images []stri
 	}
 
 	return strings.Join(promptParts, "\n\n"), imagePaths
+}
+
+// normalizeInputItems preserves structured input items when available.
+func (t *Thread) normalizeInputItems(input types.Input) []types.UserInput {
+	if s, ok := input.(string); ok {
+		return []types.UserInput{types.NewTextInput(s)}
+	}
+	if inputs, ok := input.([]types.UserInput); ok {
+		return inputs
+	}
+	return nil
 }
