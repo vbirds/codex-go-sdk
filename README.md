@@ -144,14 +144,16 @@ result, _ = resumedThread.Run("Continuing the conversation", codex.TurnOptions{}
 
 ### CodexOptions
 
-- `Transport`: Backend transport (`app-server`, `cli`)
-- `AppServerPathOverride`: Custom path to the app server executable
-- `AppServerArgs`: Extra args for the app server executable
-- `ClientInfo`: Client identity for app server initialize
-- `ApiKey`: API key for authentication
-- `BaseUrl`: Base URL for the API
-- `CodexPathOverride`: Custom path to the codex binary (CLI transport only)
-- `Env`: Environment variables for the backend process
+- `Transport`: Select backend transport (`app-server`, `cli`); default is `app-server`.
+- `AppServerPathOverride`: Override executable path used for app-server transport.
+- `AppServerArgs`: Extra process args for app-server transport (default runs `codex app-server`).
+- `ClientInfo`: Client identity sent during app-server `initialize`.
+- `CodexPathOverride`: Override executable path used for CLI transport.
+- `BaseUrl`: API base URL passed to backend process via environment.
+- `ApiKey`: API key passed to backend process via environment.
+- `Env`: Explicit environment map for backend process; when set, inherited env is not used.
+- `Verbose`: Enable verbose logs for transport execution.
+- `VerboseWriter`: Output writer for verbose logs.
 
 To force CLI transport:
 
@@ -162,24 +164,55 @@ client := codex.NewCodex(codex.CodexOptions{
 })
 ```
 
+Notes:
+
+- Default transport is `app-server`, which launches `codex app-server` and communicates over stdin/stdout.
+- CLI transport runs `codex exec --experimental-json` and only supports CLI-specific flags.
+
+`ClientInfo` fields (used by `CodexOptions.ClientInfo`):
+
+- `Name`: Client name reported to app-server.
+- `Version`: Client version reported to app-server.
+
 ### ThreadOptions
 
-- `Model`: Model to use (e.g., "claude-3-opus-20250219")
-- `SandboxMode`: Sandbox access mode (`read-only`, `workspace-write`, `danger-full-access`)
-- `WorkingDirectory`: Working directory for the thread
-- `ModelReasoningEffort`: Reasoning effort level (`minimal`, `low`, `medium`, `high`, `xhigh`)
-- `NetworkAccessEnabled`: Enable network access
-- `WebSearchMode`: Web search mode (`disabled`, `cached`, `live`)
-- `WebSearchEnabled`: Legacy web search flag
-- `ApprovalPolicy`: Approval mode (`never`, `on-request`, `on-failure`, `untrusted`)
-- `ApprovalHandler`: Callback for app-server approval requests
-- `AdditionalDirectories`: Additional directories to include
-- `SkipGitRepoCheck`: Skip git repository check
-- `DisableSkills`: Disable skills (CLI transport only)
+- `Model`: Model name for the thread.
+- `SandboxMode`: Sandbox mode (`read-only`, `workspace-write`, `danger-full-access`).
+- `WorkingDirectory`: Working directory (`cwd`) used by the agent.
+- `SkipGitRepoCheck`: Skip git repository check (CLI transport only).
+- `DisableSkills`: Disable skills feature (CLI transport only).
+- `ModelReasoningEffort`: Reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`).
+- `NetworkAccessEnabled`: Enable network access in sandbox policy/config.
+- `WebSearchMode`: Web search mode (`disabled`, `cached`, `live`), mainly for CLI transport.
+- `WebSearchEnabled`: Legacy boolean web search switch for compatibility.
+- `ApprovalPolicy`: Approval policy (`never`, `on-request`, `on-failure`, `untrusted`).
+- `ApprovalHandler`: App-server callback to approve or reject requested actions.
+- `AdditionalDirectories`: Additional directories to grant access to.
 
 Notes:
 
 - CLI-only options (`SkipGitRepoCheck`, `DisableSkills`, `WebSearchMode`, `WebSearchEnabled`) are currently ignored in app-server transport.
+- `ApprovalHandler` only applies to app-server transport. CLI transport does not surface approval requests.
+- `NetworkAccessEnabled` is enforced via sandbox policy in app-server transport; in CLI transport it maps to CLI config where supported.
+
+Input control (skills/mentions/images):
+
+- You can pass structured inputs to control skills/mentions/images via `[]codex.UserInput`.
+- Supported `UserInput` types: `text`, `local_image`, `image`, `skill`, `mention`.
+- Skills are identified by name only (no path/scope fields exposed in SDK).
+
+Example:
+
+```go
+input := []codex.UserInput{
+    codex.NewTextInput("Use the db skill to answer"),
+    codex.NewSkillInput("db"),
+    codex.NewMentionInput("@team"),
+    codex.NewImageURLInput("https://example.com/image.png"),
+}
+
+result, err := thread.Run(input, codex.TurnOptions{})
+```
 
 Approval handling example:
 
@@ -194,8 +227,8 @@ thread := client.StartThread(codex.ThreadOptions{
 
 ### TurnOptions
 
-- `OutputSchema`: JSON schema for structured output
-- `Context`: Context for cancellation
+- `OutputSchema`: JSON schema for structured output validation/format.
+- `Context`: `context.Context` for cancellation and timeouts.
 
 ## Error Handling
 
