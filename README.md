@@ -258,6 +258,49 @@ The SDK supports the same platforms as the TypeScript SDK:
 - Linux (x86_64, ARM64)
 - Windows (x86_64, ARM64)
 
+## CLI: `codex-webtest`
+
+This repo now includes a CLI tool for webpage testing driven by a test document.
+
+### What it does
+
+- Reads a document that contains the target page URL and test cases.
+- Sends the document to Codex agent with structured output constraints.
+- Optionally injects skills (default: `playwright`).
+- Generates a bug report when failed or blocked cases are detected.
+
+### Build
+
+```bash
+go build -o bin/codex-webtest ./cmd/codex-webtest
+```
+
+### Usage
+
+```bash
+./bin/codex-webtest \
+  --input ./test-plan.md \
+  --skills playwright \
+  --sandbox workspace-write \
+  --timeout 20m \
+  --report ./bug-report.md
+```
+
+### Key flags
+
+- `--input` (required): test instruction document path.
+- `--skills`: comma-separated skill names. Default `playwright`.
+- `--transport`: `app-server` (default) or `cli`.
+- `--sandbox`: `read-only`, `workspace-write` (default), or `danger-full-access`.
+- `--json`: print the structured JSON result.
+- `--report`: write bug report markdown to file (otherwise prints to stdout).
+
+### Exit codes
+
+- `0`: test completed and no blocking issues found.
+- `1`: execution/parsing failure.
+- `2`: failed or blocked cases found (bug report generated).
+
 ## Development
 
 To build and test the SDK:
