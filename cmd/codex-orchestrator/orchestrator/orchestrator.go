@@ -2,11 +2,13 @@ package orchestrator
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,13 +62,8 @@ const (
 	DefaultMaxTotalBytes = 2 * 1024 * 1024
 
 	// Output formatting constants.
-	statusOK           = "✓"
-	statusError        = "✗"
-	statusDeclined     = "⊘"
-	maxCommandPreview  = 60
-	maxQueryPreview    = 50
 	maxResponsePreview = 50
-	maxOutputLines     = 10
+	ellipsisLen        = 3
 )
 
 // DefaultIgnoreDirs lists directory names skipped during document traversal.
@@ -90,6 +87,7 @@ var DefaultPreamble = []string{
 	"background, and acceptance criteria.",
 	"The Skills section contains behavioral instructions you must follow.",
 	"Complete the work and respond with your final answer only.",
+	"Do not stop after making a plan; execute required changes and validations in this turn.",
 	"Don't forget to run lint and unit tests locally after coding to verify changes",
 }
 
@@ -227,8 +225,41 @@ func RunOrchestrator(options OrchestratorOptions) (*OrchestratorResult, error) {
 	// Build prompt
 	prompt := BuildPrompt(bundle, options.PromptPreamble)
 
+	// Run with app-server first for richer streaming semantics, then
+	// fall back to CLI transport if the stream backend disconnects.
+	result, runErr := runOrchestratorWithTransport(options, prompt, codex.TransportAppServer)
+	if runErr == nil {
+		return result, nil
+	}
+	if !shouldFallbackToCLI(runErr) {
+		return nil, runErr
+	}
+
+	progressWriter := options.ProgressWriter
+	if progressWriter == nil {
+		progressWriter = io.Discard
+	}
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Fprintf(progressWriter, "[%s] ↻ Stream failed, retrying with CLI transport...\n", timestamp)
+
+	result, retryErr := runOrchestratorWithTransport(options, prompt, codex.TransportCLI)
+	if retryErr != nil {
+		return nil, errors.Join(
+			fmt.Errorf("app-server failed: %w", runErr),
+			fmt.Errorf("cli fallback failed: %w", retryErr),
+		)
+	}
+	return result, nil
+}
+
+func runOrchestratorWithTransport(
+	options OrchestratorOptions,
+	prompt string,
+	transport codex.TransportMode,
+) (*OrchestratorResult, error) {
 	// Create codex client and run
 	codexClient := codex.NewCodex(codex.CodexOptions{
+		Transport:     transport,
 		Verbose:       options.Verbose,
 		VerboseWriter: options.VerboseWriter,
 	})
@@ -238,19 +269,26 @@ func RunOrchestrator(options OrchestratorOptions) (*OrchestratorResult, error) {
 		DisableSkills: options.DisableGlobalSkills,
 	})
 
-	// Use streaming mode for progress tracking
+	progressWriter := options.ProgressWriter
+	if progressWriter == nil {
+		progressWriter = io.Discard
+	}
 	stream, err := thread.RunStreamed(prompt, codex.TurnOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to start codex stream: %w", err)
 	}
 
-	// Process events and track progress
-	progressWriter := options.ProgressWriter
-	if progressWriter == nil {
-		progressWriter = io.Discard
-	}
-
 	return processStream(stream.Events, progressWriter)
+}
+
+func shouldFallbackToCLI(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "stream disconnected") ||
+		strings.Contains(msg, "thread error:") ||
+		strings.Contains(msg, "app server")
 }
 
 // processStream processes the event stream and returns the final result.
@@ -261,19 +299,31 @@ func processStream(events <-chan types.ThreadEvent, writer io.Writer) (*Orchestr
 	var turnFailure error
 
 	for event := range events {
-		printEventSummary(event, writer)
-
 		switch e := event.(type) {
+		case *types.ThreadStartedEvent:
+			printThreadStarted(e, writer)
+		case *types.TurnStartedEvent:
+			printTurnStarted(writer)
+		case *types.ItemStartedEvent:
+			printStartedItem(e.Item, writer)
 		case *types.ItemCompletedEvent:
+			printCompletedItem(e.Item, writer)
 			if agentMsg, ok := e.Item.(*types.AgentMessageItem); ok {
 				finalResponse = agentMsg.Text
+				printAgentResponsePreview(agentMsg, writer)
 			}
 			items = append(items, e.Item)
 		case *types.TurnCompletedEvent:
 			usage = &e.Usage
 		case *types.TurnFailedEvent:
+			printTurnFailed(e, writer)
 			turnFailure = fmt.Errorf("turn failed: %s", e.Error.Message)
 		case *types.ThreadErrorEvent:
+			if isRecoverableThreadErrorMessage(e.Message) {
+				printThreadError(e, writer)
+				continue
+			}
+			printThreadError(e, writer)
 			turnFailure = fmt.Errorf("thread error: %s", e.Message)
 		}
 
@@ -300,144 +350,86 @@ func processStream(events <-chan types.ThreadEvent, writer io.Writer) (*Orchestr
 	}, nil
 }
 
-// printEventSummary prints a human-readable summary of an event with timestamp.
-func printEventSummary(event types.ThreadEvent, writer io.Writer) {
-	timestamp := time.Now().Format("15:04:05")
-
-	switch e := event.(type) {
-	case *types.ThreadStartedEvent:
-		fmt.Fprintf(writer, "[%s] ▶ Thread started: %s\n", timestamp, e.ThreadId)
-
-	case *types.TurnStartedEvent:
-		fmt.Fprintf(writer, "[%s] ▶ Turn started\n", timestamp)
-
-	case *types.ItemStartedEvent:
-		printItemStarted(e.Item, timestamp, writer)
-
-	case *types.ItemUpdatedEvent:
-		printItemUpdated(e.Item, timestamp, writer)
-
-	case *types.ItemCompletedEvent:
-		printItemCompleted(e.Item, timestamp, writer)
-
-	case *types.TurnCompletedEvent:
-		// Summary printed at the end
-
-	case *types.TurnFailedEvent:
-		fmt.Fprintf(writer, "[%s] ✗ Turn failed: %s\n", timestamp, e.Error.Message)
-
-	case *types.ThreadErrorEvent:
-		fmt.Fprintf(writer, "[%s] ✗ Error: %s\n", timestamp, e.Message)
+func isRecoverableThreadErrorMessage(message string) bool {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	if msg == "" {
+		return false
 	}
+	return strings.HasPrefix(msg, "reconnecting") ||
+		(strings.Contains(msg, "stream disconnected") && strings.Contains(msg, "retry"))
 }
 
-// printItemStarted prints a summary for item started event.
-func printItemStarted(item types.ThreadItem, timestamp string, writer io.Writer) {
+func printThreadStarted(event *types.ThreadStartedEvent, writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Fprintf(writer, "[%s] ▶ Thread started: %s\n", timestamp, event.ThreadId)
+}
+
+func printTurnStarted(writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Fprintf(writer, "[%s] ▶ Turn started\n", timestamp)
+}
+
+func printTurnFailed(event *types.TurnFailedEvent, writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Fprintf(writer, "[%s] ✗ Turn failed: %s\n", timestamp, event.Error.Message)
+}
+
+func printThreadError(event *types.ThreadErrorEvent, writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
+	fmt.Fprintf(writer, "[%s] ✗ Error: %s\n", timestamp, event.Message)
+}
+
+func printAgentResponsePreview(item *types.AgentMessageItem, writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
+	lines := strings.Split(item.Text, "\n")
+	preview := truncate(strings.TrimSpace(lines[0]), maxResponsePreview)
+	fmt.Fprintf(writer, "[%s] ← Response: %s\n", timestamp, preview)
+}
+
+func printStartedItem(item types.ThreadItem, writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
 	switch i := item.(type) {
 	case *types.CommandExecutionItem:
-		fmt.Fprintf(writer, "[%s] $ Executing: %s\n", timestamp, truncate(i.Command, maxCommandPreview))
+		cmdPreview := truncate(strings.TrimSpace(i.Command), maxResponsePreview)
+		fmt.Fprintf(writer, "[%s] … Command started: %s\n", timestamp, cmdPreview)
 	case *types.FileChangeItem:
-		files := make([]string, 0, len(i.Changes))
-		for _, change := range i.Changes {
-			files = append(files, change.Path)
-		}
-		fmt.Fprintf(writer, "[%s] ✎ Modifying %d file(s): %s\n", timestamp, len(i.Changes), strings.Join(files, ", "))
+		fmt.Fprintf(writer, "[%s] … Patch started (%d changes)\n", timestamp, len(i.Changes))
 	case *types.McpToolCallItem:
-		fmt.Fprintf(writer, "[%s] 🔧 Tool call: %s.%s\n", timestamp, i.Server, i.Tool)
-	case *types.AgentMessageItem:
-		// Skip, will show on completion
+		fmt.Fprintf(writer, "[%s] … MCP started: %s/%s\n", timestamp, i.Server, i.Tool)
 	case *types.ReasoningItem:
 		fmt.Fprintf(writer, "[%s] 💭 Reasoning...\n", timestamp)
-	case *types.WebSearchItem:
-		fmt.Fprintf(writer, "[%s] 🔍 Searching: %s\n", timestamp, truncate(i.Query, maxQueryPreview))
-	case *types.TodoListItem:
-		active := 0
-		for _, todo := range i.Items {
-			if !todo.Completed {
-				active++
-			}
-		}
-		fmt.Fprintf(writer, "[%s] ☑ Todo list: %d active, %d completed\n", timestamp, active, len(i.Items)-active)
 	}
 }
 
-// printItemUpdated prints a summary for item updated event.
-func printItemUpdated(item types.ThreadItem, timestamp string, writer io.Writer) {
-	if i, ok := item.(*types.CommandExecutionItem); ok {
-		if i.Status == types.CommandExecutionStatusInProgress && i.AggregatedOutput != nil {
-			// Only show output summary on significant updates
-			output := *i.AggregatedOutput
-			lines := strings.Split(output, "\n")
-			if len(lines) > maxOutputLines {
-				fmt.Fprintf(writer, "[%s]   ... %d lines of output ...\n", timestamp, len(lines))
-			}
-		}
-	}
-}
-
-// printItemCompleted prints a summary for item completed event.
-func printItemCompleted(item types.ThreadItem, timestamp string, writer io.Writer) {
+func printCompletedItem(item types.ThreadItem, writer io.Writer) {
+	timestamp := time.Now().Format("15:04:05")
 	switch i := item.(type) {
 	case *types.CommandExecutionItem:
-		status := statusOK
-		if i.ExitCode != nil && *i.ExitCode != 0 {
-			status = fmt.Sprintf("%s (exit %d)", statusError, *i.ExitCode)
-		} else if i.Status == types.CommandExecutionStatusFailed {
-			status = statusError
+		exitText := "n/a"
+		if i.ExitCode != nil {
+			exitText = strconv.Itoa(*i.ExitCode)
 		}
-		duration := ""
-		if i.AggregatedOutput != nil {
-			lines := strings.Count(*i.AggregatedOutput, "\n")
-			duration = fmt.Sprintf(" | %d lines output", lines+1)
-		}
-		fmt.Fprintf(writer, "[%s]   %s Command completed%s\n", timestamp, status, duration)
-
+		cmdPreview := truncate(strings.TrimSpace(i.Command), maxResponsePreview)
+		fmt.Fprintf(writer, "[%s] $ Command done (%s, exit=%s): %s\n", timestamp, i.Status, exitText, cmdPreview)
 	case *types.FileChangeItem:
-		status := statusOK
-		switch i.Status {
-		case types.PatchApplyStatusFailed:
-			status = statusError
-		case types.PatchApplyStatusDeclined:
-			status = statusDeclined
-		case types.PatchApplyStatusInProgress, types.PatchApplyStatusCompleted:
-		}
-		fmt.Fprintf(writer, "[%s]   %s Files modified (%d changes)\n", timestamp, status, len(i.Changes))
-
+		fmt.Fprintf(writer, "[%s] Δ Patch done (%s, %d changes)\n", timestamp, i.Status, len(i.Changes))
 	case *types.McpToolCallItem:
-		status := statusOK
-		if i.Status == types.McpToolCallStatusFailed {
-			status = statusError
-		}
-		fmt.Fprintf(writer, "[%s]   %s Tool completed: %s.%s\n", timestamp, status, i.Server, i.Tool)
-
-	case *types.AgentMessageItem:
-		lines := strings.Split(i.Text, "\n")
-		preview := truncate(strings.TrimSpace(lines[0]), maxResponsePreview)
-		fmt.Fprintf(writer, "[%s] ← Response: %s\n", timestamp, preview)
-
+		fmt.Fprintf(writer, "[%s] ⌁ MCP done (%s): %s/%s\n", timestamp, i.Status, i.Server, i.Tool)
 	case *types.ReasoningItem:
-		fmt.Fprintf(writer, "[%s]   ✓ Reasoning complete (%d points)\n", timestamp, len(i.Summary))
-
-	case *types.WebSearchItem:
-		fmt.Fprintf(writer, "[%s]   ✓ Search completed\n", timestamp)
-
-	case *types.TodoListItem:
-		completed := 0
-		for _, todo := range i.Items {
-			if todo.Completed {
-				completed++
-			}
-		}
-		fmt.Fprintf(writer, "[%s]   ✓ Todo list updated (%d/%d completed)\n", timestamp, completed, len(i.Items))
+		fmt.Fprintf(writer, "[%s] ✓ Reasoning complete (%d points)\n", timestamp, len(i.Summary))
 	}
 }
 
 // truncate truncates a string to maxLen and adds ellipsis if needed.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	if maxLen <= ellipsisLen {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-ellipsisLen]) + "..."
 }
 
 type walkOptions struct {

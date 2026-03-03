@@ -166,6 +166,11 @@ func parseArgs(args []string) (CliOptions, []error) {
 
 		if arg != "" && !startsWith(arg, "-") {
 			errors = append(errors, fmt.Errorf("unknown argument: %s", arg))
+			continue
+		}
+
+		if startsWith(arg, "-") {
+			errors = append(errors, fmt.Errorf("unknown argument: %s", arg))
 		}
 	}
 
