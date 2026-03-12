@@ -49,6 +49,8 @@ func newThreadItem(itemType string) (ThreadItem, bool) {
 	switch itemType {
 	case "agentMessage":
 		return &AgentMessageItem{}, true
+	case "agent_message":
+		return &AgentMessageItem{}, true
 	case "reasoning":
 		return &ReasoningItem{}, true
 	case "userMessage":
